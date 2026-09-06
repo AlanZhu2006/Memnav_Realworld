@@ -267,6 +267,9 @@ class CecHybridRouter:
         intermediate views only keep the causal current geometry continuous.
         The caller uses the same worker/HTTP lock as planning, never a second
         concurrent writer to LingBot.
+
+        Continuity here means RGB ingestion, not verified pose accuracy. IMU
+        yaw is not fused into LingBot; pure-rotation drift remains unvalidated.
         """
         if not self.initialized or self.phase != PHASE_REVISIT:
             raise ValueError("query observation requires an initialized revisit_query phase")

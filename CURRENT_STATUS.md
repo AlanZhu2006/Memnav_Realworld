@@ -1,10 +1,19 @@
 # Current Full-Mono Real-World Status
 
-## 2026-09-07 adaptation branch (not deployed)
+## 2026-09-07 execution adaptation (deployment pending)
 
 最新审计和改动见 [REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md](REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md)。
-该分支已接入滚动重规划、转身中连续几何写入、近目标显式实验配置；只有静态检查和
-004/006/009 真实收据离线重判，没有新增真机 SR。旧实机和 GPU 工作区未切换版本。
+该分支已接入滚动重规划、转身中连续几何写入、近目标显式实验配置；已完成静态检查、
+004/006/009 真实收据离线重判，以及隔离双机静止延迟实测，没有新增真机 SR。
+稳态 123 次规划 RGB→响应中位数 0.765 s / P95 0.894 s，实际约 1 Hz；
+几何专用窗口 2.9 Hz。近目标分支未触发，不能据此宣布自动到达已修复。
+详见 [REALWORLD_LOCKED_LATENCY_RESULT_20260907.md](REALWORLD_LOCKED_LATENCY_RESULT_20260907.md)。
+临时服务已停止；旧实机和 GPU 工作区未切换版本。
+完整改动、默认/可选行为和双机接入顺序见
+[本次变更说明](REALWORLD_EXECUTION_ADAPTATION_CHANGELOG_20260907.md)。
+**纯旋转几何风险未解决**：当前 IMU 只用于底盘转向，没有约束 LingBot 的位姿估计。
+中间 RGB 更新不等于平移估计可靠；相机高度只校准尺度，不能消除漂移。
+仿真的有平移弧形 U-turn 尚未移植，本次合并不代表弧形转弯或自动到达已验证。
 009 有独立 RGB 到达锁存的工程记录，不等于任意场景自动 STOP 已验证。
 下文保留为 2026-08-30 历史快照，不能用其“当前在线/锁定”描述代替实时设备检查。
 

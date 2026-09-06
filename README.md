@@ -15,11 +15,16 @@ maintained in
 Use it as the primary experiment and handoff entry point, together with the
 latest claim boundary in [CURRENT_STATUS.md](CURRENT_STATUS.md).
 
-The **un-deployed 2026-09-07 adaptation branch** is documented in
-[the real-world / simulation audit](REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md).
-It restores rolling replanning and query-time geometry updates, and provides
-an explicit shared local-approach experiment. Offline receipt reassessment is
-not a new navigation result; existing robot runs remain unchanged.
+The **2026-09-07 execution adaptation (deployment pending)** is documented in
+[the change notes](REALWORLD_EXECUTION_ADAPTATION_CHANGELOG_20260907.md),
+[the failure audit](REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md), and
+[the locked live latency measurement](REALWORLD_LOCKED_LATENCY_RESULT_20260907.md).
+It restores rolling replanning and query-time geometry updates and adds an
+opt-in shared local-approach experiment. Stationary planning measured about
+1 Hz, with RGB-to-response P95 of 0.894 s; this is not a new navigation result.
+Pure-rotation geometry remains unverified: IMU feedback controls the turn but
+does not constrain LingBot translation. The forward-only arc U-turn has not
+been ported. Merging code does not deploy it or authorize robot motion.
 
 ## Runtime Entry Points
 

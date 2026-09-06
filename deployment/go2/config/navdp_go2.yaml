@@ -69,6 +69,8 @@ navdp_go2_adapter:
     # Rear goals use continuous pure-yaw control with measured Go2 IMU
     # heading. Finish within 8 degrees, then stop and admit a fresh RGB-D plan.
     # No creep pulse or 10-degree action slicing is used during heading turns.
+    # Intermediate RGB updates do not constrain LingBot translation. This is
+    # not the simulated forward-only arc U-turn; rotation drift is unvalidated.
 
     # Tight indoor lab setting requested by the operator. There is no soft
     # slowdown band: motion is unchanged above 0.35 m and hard-stops at or

@@ -64,6 +64,11 @@ counterpart on `work-pc`.
 - Last documented Jetson power mode: 15 W, four CPU cores. Verify current
   state when relevant. Switching to 25 W/MAXN requires explicit confirmation
   that power delivery and cooling are adequate.
+- Query-time RGB updates during an IMU turn do not establish reliable LingBot
+  translation. IMU currently controls the actuator only; the camera-height
+  scale receipt is not a pose-drift correction. The 2026-09-07 latency check
+  was stationary, and a forward-only arc U-turn has not been ported. Preserve
+  these limits when documenting or deploying the execution adaptation.
 
 ## Experiment names and the Baseline entry point
 

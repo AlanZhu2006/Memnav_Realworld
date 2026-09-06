@@ -8,6 +8,9 @@
 | 文档 | 唯一职责 |
 | --- | --- |
 | [`CURRENT_STATUS.md`](../CURRENT_STATUS.md) | 最新真机证据、已验证/未验证边界；实验前必读 |
+| [`REALWORLD_EXECUTION_ADAPTATION_CHANGELOG_20260907.md`](../REALWORLD_EXECUTION_ADAPTATION_CHANGELOG_20260907.md) | 本次 PR 的具体改动、默认与可选行为、纯旋转风险和部署步骤 |
+| [`REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md`](../REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md) | 004/006/009 失败归因、执行适配与离线重判 |
+| [`REALWORLD_LOCKED_LATENCY_RESULT_20260907.md`](../REALWORLD_LOCKED_LATENCY_RESULT_20260907.md) | 真实 Jetson/RTX 静止延迟及其验证边界 |
 | [`REALWORLD_EXPERIMENT_HANDBOOK_CN.md`](../REALWORLD_EXPERIMENT_HANDBOOK_CN.md) | 完整中文现场实验与交接手册 |
 | [`RUNBOOK.md`](../RUNBOOK.md) | Full-Mono 启动、检查、停止和故障注入速查 |
 | [`TWO_PASS_REVISIT_RUNBOOK.md`](../TWO_PASS_REVISIT_RUNBOOK.md) | sealed Survey → Formal Revisit 两阶段流程 |
