@@ -15,6 +15,12 @@ maintained in
 Use it as the primary experiment and handoff entry point, together with the
 latest claim boundary in [CURRENT_STATUS.md](CURRENT_STATUS.md).
 
+The **un-deployed 2026-09-07 adaptation branch** is documented in
+[the real-world / simulation audit](REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md).
+It restores rolling replanning and query-time geometry updates, and provides
+an explicit shared local-approach experiment. Offline receipt reassessment is
+not a new navigation result; existing robot runs remain unchanged.
+
 ## Runtime Entry Points
 
 For an ad-hoc baseline or Full-Mono run, `nav_stack.sh` provides one profile

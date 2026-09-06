@@ -97,6 +97,12 @@ counterpart on `work-pc`.
   **Jetson-local NavDP RGB-D diagnostic profile**, not this paired Baseline.
   Do not substitute it, or propose rebuilding a 4090 Baseline that already
   exists, merely because the user says "Baseline" or "Mono-native".
+- The experimental `fullmono_local_approach.json` explicitly adds the same
+  height-scaled terminal adapter to both paired arms. In that profile,
+  describe the comparator as **Mono-native + shared terminal adapter**, not
+  untouched Mono-native; preserve `terminal_approach` in resolved/formal records.
+  The default `bearing_only` profile retains the baseline definition above.
+  Do not pool these configurations into the old pair registry or formal SR.
 
 ## Canonical locked operation
 

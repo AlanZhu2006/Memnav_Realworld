@@ -168,6 +168,14 @@ class NavDPClient:
             np.asarray(result["all_values"], dtype=np.float32),
         )
 
+    def query_observation_step(self, rgb: np.ndarray, *, installed_goal_sha256: str | None) -> dict:
+        """Advance query-time geometry only; never append to the policy FIFO."""
+        return self._post_phase_endpoint(
+            "/query_observation_step",
+            files={"image": ("image.jpg", self._encode_rgb(rgb), "image/jpeg")},
+            data={"installed_goal_sha256": installed_goal_sha256 or ""},
+        )
+
     def goal_candidate(
         self,
         rgb: np.ndarray,
@@ -385,6 +393,13 @@ class NavDPClient:
         response.raise_for_status()
         return response.json()
 
+    @staticmethod
+    def validate_cec_contract(receipt: Mapping[str, Any]) -> None:
+        if (receipt.get("protocol_version") != EXPECTED_CEC_PROTOCOL_VERSION
+                or receipt.get("terminal_handoff_schema") != EXPECTED_TERMINAL_HANDOFF_SCHEMA
+                or receipt.get("query_observation_supported") is not True):
+            raise RuntimeError("CEC hub/Jetson contract mismatch: update both endpoints while motion-locked")
+
     def reset(self, intrinsic: np.ndarray, stop_threshold: float = -2.0) -> str:
         payload = {
             "intrinsic": np.asarray(intrinsic, dtype=float).tolist(),
@@ -400,18 +415,7 @@ class NavDPClient:
         receipt = response.json()
         algorithm = str(receipt.get("algo", "unknown"))
         if algorithm == "cec_hybrid_navdp":
-            if (
-                receipt.get("protocol_version")
-                != EXPECTED_CEC_PROTOCOL_VERSION
-                or receipt.get("terminal_handoff_schema")
-                != EXPECTED_TERMINAL_HANDOFF_SCHEMA
-            ):
-                raise RuntimeError(
-                    "CEC hub/Jetson runtime contract mismatch: "
-                    f"protocol={receipt.get('protocol_version')!r}, "
-                    "terminal_handoff_schema="
-                    f"{receipt.get('terminal_handoff_schema')!r}"
-                )
+            self.validate_cec_contract(receipt)
         return algorithm
 
     def imagegoal_step(

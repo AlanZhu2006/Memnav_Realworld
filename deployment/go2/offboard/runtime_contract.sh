@@ -35,23 +35,29 @@ cec_validate_health_contract() {
   local payload="$1"
   local go2_dir="$2"
   local expected_authority_mode="${3:-}"
+  local expected_terminal_approach="${4:-${CFG_TERMINAL_APPROACH:-}}"
   local expected_schema
   expected_schema="$(cec_local_terminal_schema "$go2_dir")" || return 1
-  python3 - "$payload" "$expected_schema" "$expected_authority_mode" <<'PY'
+  python3 - "$payload" "$expected_schema" "$expected_authority_mode" "$expected_terminal_approach" <<'PY'
 import json
 import sys
 
 p = json.loads(sys.argv[1])
 expected_schema = sys.argv[2]
 expected_authority_mode = sys.argv[3]
+expected_terminal_approach = sys.argv[4]
 assert p.get("algo") == "cec_hybrid_navdp"
 assert p.get("protocol_version") == 3
 assert p.get("navigation_sensor_contract") == "causal_monocular_rgb_v1"
 assert p.get("navdp_depth_source") == "monocular_sidecar"
 assert p.get("metric_depth_sensor_consumed_by_policy") is False
 assert p.get("terminal_handoff_schema") == expected_schema
+assert p.get("query_observation_supported") is True
+assert p.get("terminal_approach_mode") in {"bearing_only", "height_scaled_local"}
 assert p.get("cec_authority_mode") in {"cec", "native"}
 if expected_authority_mode:
     assert p.get("cec_authority_mode") == expected_authority_mode
+if expected_terminal_approach:
+    assert p.get("terminal_approach_mode") == expected_terminal_approach
 PY
 }

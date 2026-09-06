@@ -370,7 +370,7 @@ def _validate_experiment(experiment_file: Mapping[str, Any]) -> dict[str, Any]:
     experiment = _object(experiment_file["experiment"], "experiment")
     _exact_keys(
         experiment,
-        {"id", "profile", "authority_mode", "navigation", "arrival", "launch", "control"},
+        {"id", "profile", "authority_mode", "terminal_approach", "navigation", "arrival", "launch", "control"},
         "experiment",
     )
     _required_keys(
@@ -384,6 +384,8 @@ def _validate_experiment(experiment_file: Mapping[str, Any]) -> dict[str, Any]:
         raise ConfigError(f"unknown profile: {experiment['profile']!r}")
     if experiment["authority_mode"] not in {"native", "cec"}:
         raise ConfigError("experiment.authority_mode must be native or cec")
+    if experiment.get("terminal_approach", "bearing_only") not in {"bearing_only", "height_scaled_local"}:
+        raise ConfigError("invalid experiment.terminal_approach")
     if experiment["profile"] == "native-navdp-rgbd" and experiment["authority_mode"] != "native":
         raise ConfigError("native-navdp-rgbd requires authority_mode=native")
     navigation = _object(experiment["navigation"], "experiment.navigation")
@@ -511,7 +513,8 @@ def resolve(experiment_path: Path, output: Path | None) -> Path:
             "max_angular_rps": _number(limits["max_angular_rps"], "max_angular_rps", 0),
         },
         "memory": memory,
-        "cec": {**cec, "authority_mode": experiment["authority_mode"]},
+        "cec": {**cec, "authority_mode": experiment["authority_mode"],
+                "terminal_approach": experiment.get("terminal_approach", "bearing_only")},
         "dataset": {"auto_open": False, "id": None, "metadata": {}},
     }
     if output is None:
@@ -677,6 +680,7 @@ def _derive(
             "run_id": run_id,
             "arm": "mono_cec" if authority_mode == "cec" else "mono_native",
             "authority_mode": authority_mode,
+            "terminal_approach": payload["cec"].get("terminal_approach", "bearing_only"),
             "expected_goal_sha256": expected_goal_sha256,
             "expected_dataset_sha256": expected_dataset_sha256,
             "runtime_role_visibility": "none",
@@ -735,6 +739,7 @@ def shell_exports(payload: Mapping[str, Any], site: str) -> str:
         "CFG_EXPERIMENT_PHASE": payload["experiment"]["phase"],
         "CFG_PROFILE": payload["experiment"]["profile"],
         "CFG_AUTHORITY_MODE": payload["cec"]["authority_mode"],
+        "CFG_TERMINAL_APPROACH": payload["cec"].get("terminal_approach", "bearing_only"),
         "CFG_NAV_BACKEND": payload["navigation"]["backend"],
         "CFG_NAV_MODE": payload["navigation"]["mode"],
         "CFG_TWO_PHASE": payload["navigation"]["two_phase"],
@@ -859,6 +864,7 @@ def shell_exports(payload: Mapping[str, Any], site: str) -> str:
             "CFG_EXPERIMENT_PHASE",
             "CFG_PROFILE",
             "CFG_AUTHORITY_MODE",
+            "CFG_TERMINAL_APPROACH",
             "CFG_DATASET_AUTO_OPEN",
             "CFG_DATASET_ID",
             "CFG_DATASET_METADATA",

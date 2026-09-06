@@ -1,4 +1,4 @@
-"""Track a frozen local path against measured Go2 position, then replan."""
+"""Track timestamped local paths while newer visual plans are computed."""
 
 from collections import deque
 from dataclasses import replace
@@ -11,7 +11,7 @@ from trajectory_control import VelocityCommand, trajectory_to_command
 
 
 class PlanCycle:
-    """Sequencing only: there is no distance, turn-angle or action-time budget."""
+    """Allow asynchronous path updates; require fresh sensing after a stop."""
 
     def __init__(self, settle_s=0.15):
         if not math.isfinite(settle_s) or settle_s < 0:
@@ -50,7 +50,7 @@ class PlanCycle:
 
     @staticmethod
     def planning_allowed(phase):
-        return phase in {"need_plan", "ready_to_plan"}
+        return phase in {"need_plan", "ready_to_plan", "ready_to_execute", "execute"}
 
     @staticmethod
     def motion_allowed(phase):
@@ -98,6 +98,9 @@ class TrajectoryExecution:
         self.last_sample = None
         self.stagnation_started_s = None
         self.stagnation_progress_m = None
+        self.stagnation_origin_xy = None
+        self.image_stamp_ns = None
+        self.input_pose = None
 
     def observe(self, stamp_ns, x, y, yaw):
         if stamp_ns <= 0 or not all(math.isfinite(v) for v in (x, y, yaw)):
@@ -116,6 +119,10 @@ class TrajectoryExecution:
         return sample if abs(sample[0] - image_ns) <= 150_000_000 else None
 
     def start(self, local_path, image_ns, now_ns):
+        # Replacing a path is not evidence of physical progress. Preserve the
+        # walking watchdog across rolling plans, in measured world coordinates.
+        walking = ((self.stagnation_started_s, self.stagnation_origin_xy)
+                   if self.active else (None, None))
         self.reset()
         ref = self.reference(image_ns)
         age = self.age(now_ns)
@@ -134,12 +141,15 @@ class TrajectoryExecution:
         _, x, y, yaw = ref
         c, s = math.cos(yaw), math.sin(yaw)
         self.path = points @ np.array([[c, s], [-s, c]]) + [x, y]
+        self.image_stamp_ns = int(image_ns)
+        self.input_pose = [float(x), float(y), float(yaw)]
         self.lengths = np.linalg.norm(np.diff(self.path, axis=0), axis=1)
         self.arc = np.r_[0., np.cumsum(self.lengths)]
         self.remaining_m = float(self.arc[-1])
         self.last_sample = self.samples[-1]
         self.active = True
         self.phase = "tracking"
+        self.stagnation_started_s, self.stagnation_origin_xy = walking
         return True
 
     def step(self, now_ns, now_s, config):
@@ -195,10 +205,10 @@ class TrajectoryExecution:
         if abs(command.linear_x) >= self.stagnation_min_linear_mps:
             if self.stagnation_started_s is None:
                 self.stagnation_started_s = now_s
-                self.stagnation_progress_m = self.progress_m
-            elif self.progress_m - self.stagnation_progress_m >= self.stagnation_min_progress_m:
+                self.stagnation_origin_xy = pos.copy()
+            elif np.linalg.norm(pos - self.stagnation_origin_xy) >= self.stagnation_min_progress_m:
                 self.stagnation_started_s = now_s
-                self.stagnation_progress_m = self.progress_m
+                self.stagnation_origin_xy = pos.copy()
             elif now_s - self.stagnation_started_s >= self.stagnation_timeout_s:
                 self.active = False
                 self.phase = "stalled_replan"
@@ -210,6 +220,7 @@ class TrajectoryExecution:
             # is requested again.
             self.stagnation_started_s = None
             self.stagnation_progress_m = None
+            self.stagnation_origin_xy = None
         return replace(command, path_length=self.remaining_m)
 
     def _fail(self, phase):
@@ -219,6 +230,8 @@ class TrajectoryExecution:
 
     def audit(self, now_ns, now_s):
         return dict(active=self.active, phase=self.phase, progress_m=self.progress_m,
+                    image_stamp_ns=self.image_stamp_ns, input_pose=self.input_pose,
+                    execution_contract="timestamped_receding_horizon_v1",
                     remaining_m=self.remaining_m, endpoint_distance_m=self.endpoint_distance_m,
                     feedback_age_s=self.age(now_ns), feedback_source="go2_sportmodestate",
                     completed_age_s=None if self.completed_s is None else now_s-self.completed_s,

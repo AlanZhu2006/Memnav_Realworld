@@ -1,5 +1,15 @@
 # Current Full-Mono Real-World Status
 
+## 2026-09-07 adaptation branch (not deployed)
+
+最新审计和改动见 [REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md](REALWORLD_RECEDING_HORIZON_AUDIT_20260907.md)。
+该分支已接入滚动重规划、转身中连续几何写入、近目标显式实验配置；只有静态检查和
+004/006/009 真实收据离线重判，没有新增真机 SR。旧实机和 GPU 工作区未切换版本。
+009 有独立 RGB 到达锁存的工程记录，不等于任意场景自动 STOP 已验证。
+下文保留为 2026-08-30 历史快照，不能用其“当前在线/锁定”描述代替实时设备检查。
+
+---
+
 Snapshot: **2026-08-30, Foxglove + MCAP migration**
 
 现场实验、交接、双机架构、两阶段数据、控制安全、证据采集和SR/SPL的统一操作入口为
