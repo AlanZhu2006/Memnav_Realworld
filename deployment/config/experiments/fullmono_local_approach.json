@@ -1,0 +1,21 @@
+{
+  "schema": "memnav-realworld-experiment-v1",
+  "system_config": "../system.json",
+  "experiment": {
+    "id": "fullmono-local-approach-engineering-20260907",
+    "profile": "fullmono-lingbot-cec",
+    "authority_mode": "cec",
+    "terminal_approach": "height_scaled_local",
+    "navigation": {
+      "image_goal": "deployment/go2/goals/goal_d_novel_frame_125.jpg",
+      "revisit_image_goal": null
+    },
+    "arrival": {
+      "module": "rgb-homography",
+      "image_goal": "deployment/go2/goals/goal_d_novel_frame_125.jpg",
+      "allowed_phases": ["memory_recording", "revisit_query"]
+    },
+    "launch": {"camera": true, "go2_bridge": false, "foxglove": true},
+    "control": {"profile": "formal"}
+  }
+}
