@@ -15,10 +15,11 @@ import message_filters
 import numpy as np
 
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import Point, PoseStamped, Twist, Vector3Stamped
 from nav_msgs.msg import Path as NavPath, Odometry
-from rclpy.executors import ExternalShutdownException
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
@@ -100,7 +101,12 @@ class NavDPGo2Adapter(Node):
         self._plan_cycle = PlanCycle(self.settle_before_sense_s)
         self._rgbd_pause_reason = ""
         self._rgbd_pause_started_s = None
-        self._trajectory_execution = TrajectoryExecution()
+        self._trajectory_execution = TrajectoryExecution(
+            completion_tolerance_m=self.local_completion_tolerance_m,
+            stagnation_timeout_s=self.stagnation_timeout_s,
+            stagnation_min_progress_m=self.stagnation_min_progress_m,
+            stagnation_min_linear_mps=self.stagnation_min_linear_mps,
+        )
         self._latency_motion_receipt: dict = {}
         self._heading_turn = HeadingTurn()
         self._turn_image_ns = 0
@@ -162,11 +168,20 @@ class NavDPGo2Adapter(Node):
             Image, self.image_goal_debug_topic, state_qos
         )
 
+        # Keep RGB-D conversion from starving the 20 Hz pose/control path.
+        # Each group remains internally serialized; the executor may run the
+        # independent groups concurrently and shared state is guarded by
+        # self._lock.
+        self._rgbd_callback_group = MutuallyExclusiveCallbackGroup()
+        self._pose_callback_group = MutuallyExclusiveCallbackGroup()
+        self._control_callback_group = MutuallyExclusiveCallbackGroup()
         self._rgb_sub = message_filters.Subscriber(
-            self, Image, self.rgb_topic, qos_profile_sensor_data
+            self, Image, self.rgb_topic, qos_profile_sensor_data,
+            callback_group=self._rgbd_callback_group,
         )
         self._depth_sub = message_filters.Subscriber(
-            self, Image, self.depth_topic, qos_profile_sensor_data
+            self, Image, self.depth_topic, qos_profile_sensor_data,
+            callback_group=self._rgbd_callback_group,
         )
         self._rgbd_sync = message_filters.ApproximateTimeSynchronizer(
             [self._rgb_sub, self._depth_sub],
@@ -175,42 +190,74 @@ class NavDPGo2Adapter(Node):
         )
         self._rgbd_sync.registerCallback(self._on_rgbd)
         self.create_subscription(
-            CameraInfo, self.camera_info_topic, self._on_camera_info, qos_profile_sensor_data
+            CameraInfo, self.camera_info_topic, self._on_camera_info, qos_profile_sensor_data,
+            callback_group=self._rgbd_callback_group,
         )
-        self.create_subscription(Bool, self.enable_topic, self._on_enable, command_qos)
         self.create_subscription(
-            Vector3Stamped, "/navdp/go2/body_heading", self._on_body_heading, 1
+            Bool, self.enable_topic, self._on_enable, command_qos,
+            callback_group=self._control_callback_group,
         )
-        self.create_subscription(Odometry, "/navdp/go2/odometry", self._on_body_pose, 1)
-        self.create_subscription(Bool, self.estop_topic, self._on_estop, command_qos)
-        self.create_subscription(Bool, self.arrival_topic, self._on_arrival, command_qos)
+        self.create_subscription(
+            Vector3Stamped, "/navdp/go2/body_heading", self._on_body_heading, 1,
+            callback_group=self._pose_callback_group,
+        )
+        self.create_subscription(
+            Odometry, "/navdp/go2/odometry", self._on_body_pose, 1,
+            callback_group=self._pose_callback_group,
+        )
+        self.create_subscription(
+            Bool, self.estop_topic, self._on_estop, command_qos,
+            callback_group=self._control_callback_group,
+        )
+        self.create_subscription(
+            Bool, self.arrival_topic, self._on_arrival, command_qos,
+            callback_group=self._control_callback_group,
+        )
 
-        self.create_service(Trigger, "~/operator_stop", self._operator_stop_service)
-        self.create_service(SetBool, "~/set_enabled", self._set_enabled_service)
-        self.create_service(Trigger, "~/reset_policy", self._reset_policy_service)
+        self.create_service(
+            Trigger, "~/operator_stop", self._operator_stop_service,
+            callback_group=self._control_callback_group,
+        )
+        self.create_service(
+            SetBool, "~/set_enabled", self._set_enabled_service,
+            callback_group=self._control_callback_group,
+        )
+        self.create_service(
+            Trigger, "~/reset_policy", self._reset_policy_service,
+            callback_group=self._control_callback_group,
+        )
         if self.two_phase_episode:
             self.create_service(
                 Trigger, "~/capture_goal_candidate",
                 self._capture_goal_candidate_service,
+                callback_group=self._control_callback_group,
             )
             self.create_service(
                 SetBool,
                 "~/set_auto_goal_candidate_capture",
                 self._set_auto_goal_candidate_capture_service,
+                callback_group=self._control_callback_group,
             )
             self.create_service(
-                Trigger, "~/begin_revisit", self._begin_revisit_service
+                Trigger, "~/begin_revisit", self._begin_revisit_service,
+                callback_group=self._control_callback_group,
             )
             if self.survey_dataset_id:
                 self.create_service(
-                    Trigger, "~/survey_start", self._survey_start_service
+                    Trigger, "~/survey_start", self._survey_start_service,
+                    callback_group=self._control_callback_group,
                 )
                 self.create_service(
-                    Trigger, "~/survey_seal", self._survey_seal_service
+                    Trigger, "~/survey_seal", self._survey_seal_service,
+                    callback_group=self._control_callback_group,
                 )
 
         self.create_timer(1.0 / self.planning_rate_hz, self._request_inference)
-        self.create_timer(1.0 / self.control_rate_hz, self._control_tick)
+        self.create_timer(
+            1.0 / self.control_rate_hz,
+            self._control_tick,
+            callback_group=self._control_callback_group,
+        )
         self.create_timer(0.5, self._publish_status)
 
         self._worker = threading.Thread(
@@ -286,6 +333,10 @@ class NavDPGo2Adapter(Node):
             "rotate_in_place_angle_rad": 0.70,
             "rotate_gain": 1.50,
             "slow_path_length_m": 0.30,
+            "local_completion_tolerance_m": 0.15,
+            "stagnation_timeout_s": 4.0,
+            "stagnation_min_progress_m": 0.02,
+            "stagnation_min_linear_mps": 0.08,
             "allow_reverse": False,
             "reverse_lateral_angle_rad": 0.55,
             "max_linear_accel_mps2": 0.50,
@@ -390,6 +441,10 @@ class NavDPGo2Adapter(Node):
             "max_linear_accel_mps2",
             "max_angular_accel_rps2",
             "settle_before_sense_s",
+            "local_completion_tolerance_m",
+            "stagnation_timeout_s",
+            "stagnation_min_progress_m",
+            "stagnation_min_linear_mps",
         ):
             setattr(self, name, float(self.get_parameter(name).value))
         self.plan_while_disabled = bool(self.get_parameter("plan_while_disabled").value)
@@ -414,6 +469,11 @@ class NavDPGo2Adapter(Node):
             raise ValueError("rgbd_sync_queue_size must be positive")
         if self.settle_before_sense_s < 0.0:
             raise ValueError("settle_before_sense_s must be nonnegative")
+        if (self.local_completion_tolerance_m <= 0.0
+                or self.stagnation_timeout_s <= 0.0
+                or self.stagnation_min_progress_m <= 0.0
+                or self.stagnation_min_linear_mps <= 0.0):
+            raise ValueError("trajectory execution thresholds must be positive")
 
         self.controller_config = ControllerConfig(
             lookahead_m=float(self.get_parameter("lookahead_m").value),
@@ -1605,6 +1665,55 @@ class NavDPGo2Adapter(Node):
                         "error": f"{type(diagnostic_error).__name__}: {diagnostic_error}",
                         "observation_only": True,
                     }
+                # Upstream NavDP encodes a low-critic recovery by rewriting the
+                # selected path to x=0, y=+/-1.  A trajectory follower reads
+                # that sentinel as a full 90-degree turn.  That behavior is
+                # unsafe for a legged robot whose swept footprint is not
+                # certified by the forward depth ROI.  Hold position and wait
+                # for a post-stop RGB-D observation instead.
+                if bool(plan_receipt.get("critic_fallback_applied")):
+                    finished = time.monotonic()
+                    plan_receipt["low_critic_motion_guard"] = {
+                        "schema": "navdp_low_critic_motion_guard_v1",
+                        "action": "hold_and_replan",
+                        "critic_max": plan_receipt.get("critic_max"),
+                        "critic_threshold": plan_receipt.get("critic_threshold"),
+                        "upstream_fallback_trajectory_suppressed": True,
+                    }
+                    with self._lock:
+                        # Discard an inference that crossed an arming or stop
+                        # boundary, just as for an ordinary accepted plan.
+                        if self._enabled and (
+                            self._heading_turn.active
+                            or self._trajectory_execution.active
+                            or (
+                                self._plan_cycle.sense_after_ns is not None
+                                and int(input_timing.get("rgb_stamp_ns") or 0)
+                                <= self._plan_cycle.sense_after_ns
+                            )
+                        ):
+                            continue
+                        self._trajectory = None
+                        self._trajectory_execution.reset()
+                        self._candidate_trajectories = candidates
+                        self._candidate_values = candidate_values
+                        self._target_command = VelocityCommand()
+                        self._plan_monotonic = finished
+                        self._rgbd_pause_reason = "low_critic_fallback"
+                        self._rgbd_pause_started_s = finished
+                        self._last_inference_s = finished - started
+                        self._last_error = ""
+                        self._stop_reason = "low_critic_hold"
+                        self._last_plan_receipt = plan_receipt
+                        self._terminal_motion_receipt = {}
+                        self._latency_motion_receipt = {}
+                        self._plan_cycle.install_plan(finished)
+                    self._publish_zero("low_critic_hold")
+                    self._note_action_stopped_after_zero(finished)
+                    self._publish_receipt(
+                        "imagegoal_plan_rejected_low_critic", plan_receipt
+                    )
+                    continue
                 terminal = terminal_motion_override(
                     plan_receipt,
                     rotate_gain=self.controller_config.rotate_gain,
@@ -1852,10 +1961,23 @@ class NavDPGo2Adapter(Node):
                 target = self._trajectory_execution.step(
                     self._ros_now_ns() or 0, now, self.controller_config
                 )
-                if self._trajectory_execution.phase == "complete":
-                    self._publish_zero("trajectory_complete")
+                if self._trajectory_execution.phase in {"complete", "stalled_replan"}:
+                    phase = self._trajectory_execution.phase
+                    reason = (
+                        "trajectory_complete"
+                        if phase == "complete"
+                        else "trajectory_stalled_replan"
+                    )
+                    self._publish_zero(reason)
                     self._target_command = VelocityCommand()
                     self._note_action_stopped_after_zero(now)
+                    if phase == "stalled_replan":
+                        self._warn_throttled(
+                            "trajectory_stalled_replan",
+                            "Go2 made insufficient path progress; stopped the local action "
+                            "and requested a fresh post-stop plan",
+                            period_s=1.0,
+                        )
                     return
                 if not self._trajectory_execution.active:
                     self._fail_trajectory(self._trajectory_execution.phase)
@@ -2335,12 +2457,16 @@ class NavDPGo2Adapter(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = NavDPGo2Adapter()
+    executor = MultiThreadedExecutor(num_threads=3)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.stop()
+        executor.remove_node(node)
+        executor.shutdown(timeout_sec=2.0)
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

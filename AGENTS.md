@@ -65,13 +65,70 @@ counterpart on `work-pc`.
   state when relevant. Switching to 25 W/MAXN requires explicit confirmation
   that power delivery and cooling are adequate.
 
+## Experiment names and the Baseline entry point
+
+- User-facing names: **Baseline = Mono-native** (`--arm mono_native`,
+  `authority_mode=native`); **our method = CEC** (`--arm mono_cec`,
+  `authority_mode=cec`). Use these names consistently in discussion and run
+  records. Do not use the ambiguous phrase "run native" / "原生跑".
+- In the current paired Episode workflow, a request for Baseline means the
+  existing RTX 4090 Full-Mono `mono_native` arm, not the Jetson-local RGB-D
+  profile. Prepare it through `deployment/go2/offboard/revisit_experiment.sh`
+  `formal-start ... --arm mono_native`, supplying the current Episode's sealed
+  dataset, exact frozen goal/hash, unique run ID and required registration (or
+  explicitly identified engineering-run parameters). Use the matching resolved
+  contract for supervised execution. Keep all motion/preflight rules above.
+- Both paired arms run NavDP on the RTX 4090 and use the same causal LingBot
+  monocular-depth pipeline. D435i metric depth stays in local safety/evidence,
+  not in either paired arm's policy input. Preserve the paired goal, starting
+  pose, controller settings, budget and termination procedure; verify actual
+  runtime authority and goal/dataset identities before motion.
+- "Without memory" here means **without CEC long-term retrieval / direct-pose
+  control authority**, not a stateless policy. Mono-native ignores retrieved
+  navigation proposals and routes to native ImageGoal NavDP (`cec_takeover=false`,
+  no selected anchor). NavDP retains its own short-term observation FIFO.
+  The shared LingBot causal state, sealed-dataset replay and depth-producing
+  probe remain; do not claim no history, no Survey processing, no retrieval
+  computation, or no memory anywhere. Independent formal query preparation
+  initializes the NavDP FIFO from the current query-start frame rather than
+  filling it from Survey history. Describe the ablation as disabling memory
+  guidance, not removing every stateful component.
+- `deployment/config/experiments/native_imagegoal.json` is a separate
+  **Jetson-local NavDP RGB-D diagnostic profile**, not this paired Baseline.
+  Do not substitute it, or propose rebuilding a 4090 Baseline that already
+  exists, merely because the user says "Baseline" or "Mono-native".
+
 ## Canonical locked operation
+
+### Protected experiment registry
+
+- Read `runtime/go2/experiment_pairs/index.json` before collecting, labeling,
+  counting, or cleaning experiments. The user designated `pair_001` as the
+  first and currently sole valid completed pair on 2026-09-06 (local time).
+  Start subsequent collection as a new pair; do not overwrite or recategorize
+  the protected pair based on old GUI Episode status.
+- Pair 001: Episode `episode_20260905T175456_573243Z`; CEC capture
+  `episode_20260905T175456_573243Z_retry_202653Z` is **human success**;
+  Baseline (Mono-native) capture
+  `episode_20260905T175456_573243Z_baseline_204358Z` is **human failure**.
+  `runtime/go2/experiment_pairs/pair_001/pair.json` binds the two captures,
+  goal, shared Survey, runtime contracts, and retained GPU dependencies.
+- Protect all dependencies named in that registry, not only the two MCAPs.
+  The CEC recording was tail-trimmed at the user's request; preserve this
+  provenance. User-valid pair status does not mean independent GT validation
+  or automatic arrival, and a failed Baseline does not invalidate the pair.
+- The user authorized deleting earlier test data during the pair-001 cleanup.
+  This is not standing permission to delete future experiments. Consult the
+  registry and obtain new scope for any later deletion.
 
 Before starting the stack, check `rs-enumerate-devices`, USB SuperSpeed, and
 `ping 192.168.123.161`. These are automated checks, not conversational approval
 steps. Immediately after a locked start, verify `/navdp/status` reports
 `enabled:false` and `estop:true` before proceeding. An offline Go2 may be
 observed in camera-only mode but cannot begin navigation.
+
+The following commands apply only to the separate Jetson-local RGB-D diagnostic
+profile, when explicitly requested; they are not the Baseline launch sequence:
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -81,4 +138,4 @@ bash deployment/go2/nav_stack.sh stop --config deployment/config/experiments/nat
 ```
 
 Use the active episode's documented offboard workflow and resolved contract
-for Revisit; the native example above is not a replacement for that workflow.
+for Revisit; the local RGB-D example above is not a replacement for that workflow.

@@ -64,7 +64,26 @@ class PlanCycle:
 class TrajectoryExecution:
     """Use SportModeState pose for local execution, never as policy input or GT."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        completion_tolerance_m=0.15,
+        stagnation_timeout_s=4.0,
+        stagnation_min_progress_m=0.02,
+        stagnation_min_linear_mps=0.08,
+    ):
+        values = (
+            completion_tolerance_m,
+            stagnation_timeout_s,
+            stagnation_min_progress_m,
+            stagnation_min_linear_mps,
+        )
+        if not all(math.isfinite(value) and value > 0 for value in values):
+            raise ValueError("trajectory execution thresholds must be finite and positive")
+        self.completion_tolerance_m = float(completion_tolerance_m)
+        self.stagnation_timeout_s = float(stagnation_timeout_s)
+        self.stagnation_min_progress_m = float(stagnation_min_progress_m)
+        self.stagnation_min_linear_mps = float(stagnation_min_linear_mps)
         self.samples = deque(maxlen=400)
         self.reset()
 
@@ -77,6 +96,8 @@ class TrajectoryExecution:
         self.endpoint_distance_m = None
         self.completed_s = None
         self.last_sample = None
+        self.stagnation_started_s = None
+        self.stagnation_progress_m = None
 
     def observe(self, stamp_ns, x, y, yaw):
         if stamp_ns <= 0 or not all(math.isfinite(v) for v in (x, y, yaw)):
@@ -153,8 +174,12 @@ class TrajectoryExecution:
             self.progress_m = best[1]
         self.remaining_m = max(0., float(self.arc[-1]) - self.progress_m)
         self.endpoint_distance_m = float(np.linalg.norm(self.path[-1]-pos))
-        # This is an endpoint tolerance, not a repeated movement budget.
-        if self.remaining_m <= 0.08 and self.endpoint_distance_m <= 0.08:
+        # This completes only the current local action. The post-stop RGB-D
+        # cycle still has to produce a fresh plan before motion can continue.
+        # Go2 cannot reliably realize the vanishing velocities produced by an
+        # 8 cm tail, so stop before entering that gait dead zone.
+        if (self.remaining_m <= self.completion_tolerance_m
+                and self.endpoint_distance_m <= self.completion_tolerance_m):
             self.active = False
             self.phase = "complete"
             self.completed_s = now_s
@@ -167,6 +192,24 @@ class TrajectoryExecution:
         c, s = math.cos(yaw), math.sin(yaw)
         body = delta @ np.array([[c, -s], [s, c]])
         command = trajectory_to_command(np.array([[0., 0.], body]), config)
+        if abs(command.linear_x) >= self.stagnation_min_linear_mps:
+            if self.stagnation_started_s is None:
+                self.stagnation_started_s = now_s
+                self.stagnation_progress_m = self.progress_m
+            elif self.progress_m - self.stagnation_progress_m >= self.stagnation_min_progress_m:
+                self.stagnation_started_s = now_s
+                self.stagnation_progress_m = self.progress_m
+            elif now_s - self.stagnation_started_s >= self.stagnation_timeout_s:
+                self.active = False
+                self.phase = "stalled_replan"
+                self.completed_s = now_s
+                return VelocityCommand()
+        else:
+            # Rotation-only control and intentionally tiny translations do not
+            # prove a walking failure. Restart the watchdog when forward motion
+            # is requested again.
+            self.stagnation_started_s = None
+            self.stagnation_progress_m = None
         return replace(command, path_length=self.remaining_m)
 
     def _fail(self, phase):
@@ -178,4 +221,10 @@ class TrajectoryExecution:
         return dict(active=self.active, phase=self.phase, progress_m=self.progress_m,
                     remaining_m=self.remaining_m, endpoint_distance_m=self.endpoint_distance_m,
                     feedback_age_s=self.age(now_ns), feedback_source="go2_sportmodestate",
-                    completed_age_s=None if self.completed_s is None else now_s-self.completed_s)
+                    completed_age_s=None if self.completed_s is None else now_s-self.completed_s,
+                    completion_tolerance_m=self.completion_tolerance_m,
+                    stagnation_age_s=(None if self.stagnation_started_s is None
+                                      else now_s-self.stagnation_started_s),
+                    stagnation_timeout_s=self.stagnation_timeout_s,
+                    stagnation_min_progress_m=self.stagnation_min_progress_m,
+                    stagnation_min_linear_mps=self.stagnation_min_linear_mps)

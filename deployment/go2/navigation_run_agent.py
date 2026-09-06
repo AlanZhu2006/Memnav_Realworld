@@ -250,7 +250,7 @@ def live_fault(
     else:
         plan_age = status.get("plan_age_s")
         post_execution_replan = any(
-            receipt.get("phase") == "complete"
+            receipt.get("phase") in {"complete", "stalled_replan"}
             and isinstance(receipt.get("completed_age_s"), (int, float))
             and 0 <= receipt["completed_age_s"] <= max_plan_age_s
             for receipt in (heading, status.get("trajectory_execution") or {})

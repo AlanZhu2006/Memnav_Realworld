@@ -166,10 +166,17 @@ def front_clearance(
         return None
 
     roi = depth[y0:y1, x0:x1]
-    valid = np.isfinite(roi) & (roi > 0.05) & (roi <= config.max_valid_depth_m)
-    if float(valid.mean()) < config.min_valid_fraction:
+    observed = np.isfinite(roi) & (roi > 0.05)
+    if float(observed.mean()) < config.min_valid_fraction:
         return None
-    return float(np.percentile(roi[valid], np.clip(config.percentile, 0.0, 100.0)))
+
+    # Depth beyond the local safety horizon still proves that the pixel does
+    # not contain an obstacle inside that horizon.  Clamp those observations
+    # instead of treating an open, distant view as unavailable depth.
+    clearance_depth = np.minimum(roi[observed], config.max_valid_depth_m)
+    return float(
+        np.percentile(clearance_depth, np.clip(config.percentile, 0.0, 100.0))
+    )
 
 
 def apply_depth_safety(
@@ -193,10 +200,11 @@ def apply_depth_safety(
         )
         return SafetyResult(command=stopped, clearance_m=None, reason="depth_unavailable_stop")
 
-    # The D435i center ROI is authoritative only for forward translation. It
-    # cannot geometrically certify rear clearance or the swept side footprint
-    # of a pure rotation, so do not present those as protected directions.
-    if command.linear_x > 0.0 and clearance <= config.hard_stop_m:
+    # The center ROI cannot certify the full swept footprint of a rotation,
+    # but a known obstacle inside the hard-stop distance is sufficient reason
+    # to prohibit both translation and rotation.  This is conservative and
+    # prevents a legged platform from pivoting into an already-visible object.
+    if clearance <= config.hard_stop_m:
         stopped = VelocityCommand(
             target_x=command.target_x,
             target_y=command.target_y,
