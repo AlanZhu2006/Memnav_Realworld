@@ -408,6 +408,9 @@ class RgbGoalArrivalNode:
         )
         self.node.create_timer(1.0 / args.rate_hz, self._tick)
         self.latest_rgb: Optional[np.ndarray] = None
+        self.latest_rgb_stamp_ns = 0
+        self.latest_rgb_received_s = 0.0
+        self.latest_status_received_s = 0.0
         self.latest_sequence = 0
         self.processed_sequence = 0
         self.enabled = False
@@ -421,6 +424,9 @@ class RgbGoalArrivalNode:
         self.disable_request_sent = False
 
     def _on_rgb(self, message) -> None:
+        stamp_ns = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
+        if stamp_ns <= self.latest_rgb_stamp_ns:
+            return
         try:
             rgb = np.asarray(
                 self.bridge.imgmsg_to_cv2(message, desired_encoding="rgb8"),
@@ -430,6 +436,8 @@ class RgbGoalArrivalNode:
             self.last_error = f"rgb_conversion_failed:{exc}"
             return
         self.latest_rgb = rgb.copy()
+        self.latest_rgb_stamp_ns = stamp_ns
+        self.latest_rgb_received_s = time.monotonic()
         self.latest_sequence += 1
 
     def _on_navdp_status(self, message) -> None:
@@ -443,6 +451,7 @@ class RgbGoalArrivalNode:
             self.last_error = "invalid_navdp_status"
             return
         was_armed = self._armed()
+        self.latest_status_received_s = time.monotonic()
         self.enabled = enabled
         self.estop = estop
         self.phase = phase
@@ -522,6 +531,14 @@ class RgbGoalArrivalNode:
             self._publish_status()
             return
         self.processed_sequence = self.latest_sequence
+        received_age = time.monotonic() - self.latest_rgb_received_s
+        source_age = (self.node.get_clock().now().nanoseconds - self.latest_rgb_stamp_ns) / 1e9
+        if (received_age > self.args.max_image_age_s or not 0 <= source_age <= self.args.max_image_age_s
+                or time.monotonic() - self.latest_status_received_s > 2.0):
+            self.verifier.reset()
+            self.last_error = "stale_arrival_observation_or_control_state"
+            self._publish_status()
+            return
         try:
             result = self.verifier.evaluate(self.latest_rgb)
             self.last_result = result
@@ -536,7 +553,14 @@ class RgbGoalArrivalNode:
             self._publish_status()
             return
         if result.confirmed:
-            self._latch_arrival()
+            # Matching time is part of evidence age, not a free extension of
+            # the RGB freshness limit while the robot may still be moving.
+            final_age = (self.node.get_clock().now().nanoseconds - self.latest_rgb_stamp_ns) / 1e9
+            if not 0 <= final_age <= self.args.max_image_age_s:
+                self.verifier.reset()
+                self.last_error = "arrival_match_finished_too_late"
+            else:
+                self._latch_arrival()
         self._publish_status()
 
     def stop(self) -> None:
@@ -563,6 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--debug-topic", default="/navdp/rgb_arrival_debug")
     parser.add_argument("--rate-hz", type=float, default=12.0)
+    parser.add_argument("--max-image-age-s", type=float, default=0.60)
     parser.add_argument("--arm-grace-s", type=float, default=0.75)
     parser.add_argument("--image-width", type=int, default=480)
     parser.add_argument("--ratio-test", type=float, default=0.72)
@@ -583,8 +608,9 @@ def main() -> None:
     import rclpy
 
     args, ros_args = build_parser().parse_known_args()
-    if args.rate_hz <= 0.0 or args.arm_grace_s < 0.0:
-        raise ValueError("rate_hz must be positive and arm_grace_s non-negative")
+    if (not all(math.isfinite(v) and v > 0 for v in (args.rate_hz, args.max_image_age_s))
+            or not math.isfinite(args.arm_grace_s) or args.arm_grace_s < 0.0):
+        raise ValueError("rate/image age must be positive and arm grace non-negative")
     rclpy.init(args=ros_args)
     detector = RgbGoalArrivalNode(args)
     try:

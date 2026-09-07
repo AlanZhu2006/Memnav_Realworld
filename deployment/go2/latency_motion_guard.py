@@ -41,9 +41,10 @@ def _stopped(command: VelocityCommand) -> VelocityCommand:
 class LatencyMotionGuard:
     """Reject trajectories inferred from an excessively old observation.
 
-    Steering is recomputed from measured pose while following a frozen path. It is intentionally not filtered across plans:
-    every plan is produced from a new observation captured while stationary,
-    so a two-plan reversal confirmation would only insert a dead cycle.
+    Paths are anchored at RGB exposure and followed using fresh measured pose.
+    Replanning may happen during motion; do not reinterpret an old camera-frame
+    path as if it were expressed at inference return. No cross-plan sign vote
+    is applied: the executor compensates the coordinates instead.
     """
 
     def __init__(

@@ -24,6 +24,9 @@ navdp_go2_adapter:
     auto_goal_candidate_post_guard_frames: 4
     auto_select_goal_candidate: true
     planning_rate_hz: 1.5
+    geometry_rate_hz: 3.0
+    # Opt in only for supervised swept-footprint commissioning.
+    low_critic_search_enabled: false
     control_rate_hz: 20.0
     connect_timeout_s: 3.0
     request_timeout_s: 180.0
@@ -43,13 +46,22 @@ navdp_go2_adapter:
     rotate_in_place_angle_rad: 0.70
     rotate_gain: 1.50
     slow_path_length_m: 0.30
+    # A local segment ends before its tapered velocity falls into the Go2 gait
+    # dead zone. This does not declare ImageGoal arrival; it stops, senses and
+    # asks for a fresh plan.
+    local_completion_tolerance_m: 0.15
+    # If a meaningful forward command produces less than 2 cm of path progress
+    # in four seconds, stop this local action and replan from post-stop RGB-D.
+    stagnation_timeout_s: 4.0
+    stagnation_min_progress_m: 0.02
+    stagnation_min_linear_mps: 0.08
     allow_reverse: false
     reverse_lateral_angle_rad: 0.55
     max_linear_accel_mps2: 0.45
     max_angular_accel_rps2: 1.00
 
-    # Track each full local trajectory against measured body pose. Only its
-    # endpoint (or an interruption) ends execution; then admit post-stop RGB-D.
+    # Replan during motion; anchor each returned trajectory at RGB exposure.
+    # No mandatory stop every 0.3 m. Sensor gaps/stops still require fresh RGB.
     latency_motion_guard_enabled: true
     latency_max_plan_input_age_s: 1.50
     settle_before_sense_s: 0.15
@@ -57,11 +69,13 @@ navdp_go2_adapter:
     # Rear goals use continuous pure-yaw control with measured Go2 IMU
     # heading. Finish within 8 degrees, then stop and admit a fresh RGB-D plan.
     # No creep pulse or 10-degree action slicing is used during heading turns.
+    # Intermediate RGB updates do not constrain LingBot translation. This is
+    # not the simulated forward-only arc U-turn; rotation drift is unvalidated.
 
     # Tight indoor lab setting requested by the operator. There is no soft
     # slowdown band: motion is unchanged above 0.35 m and hard-stops at or
-    # below 0.35 m for forward translation. Pure yaw is not blocked by a
-    # center-front ROI that cannot represent the robot's swept side footprint.
+    # below 0.35 m for any motion. Front ROI clearance alone does not prove
+    # swept-side clearance for a turn.
     # Invalid depth remains fail-closed for every motion command.
     depth_hard_stop_m: 0.35
     depth_percentile: 10.0

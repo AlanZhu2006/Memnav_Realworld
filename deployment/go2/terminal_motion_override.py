@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from trajectory_control import VelocityCommand
 
 
-EXPECTED_HANDOFF_SCHEMA = "cec_direct_bearing_handoff_v2_20260824"
+EXPECTED_HANDOFF_SCHEMA = "cec_local_approach_handoff_v3_20260907"
 EXPECTED_POINT_TOKEN_SUPPORT_DEG = 60.0
 POINT_TOKEN_HANDOFF_MARGIN_DEG = 5.0
 

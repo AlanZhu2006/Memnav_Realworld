@@ -26,6 +26,7 @@ exec env PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
     --camera-height-m "$CFG_CAMERA_HEIGHT_M" \
     --authority-mode "$CFG_AUTHORITY_MODE" \
     --historical-depth-source "$CFG_HISTORICAL_DEPTH_SOURCE" \
+    --terminal-approach "$CFG_TERMINAL_APPROACH" \
     --goal-candidate-dir "$CEC_GOAL_CANDIDATE_DIR" \
     --goal-score-stride "$CFG_GOAL_SCORE_STRIDE" \
     --goal-min-frame-gap "$CFG_GOAL_MIN_FRAME_GAP" \

@@ -247,10 +247,15 @@ def live_fault(
         if (not isinstance(age, (int, float)) or isinstance(age, bool)
                 or not math.isfinite(age) or not 0 <= age <= 0.35):
             return "position_feedback_stale"
+        if status.get("execution_contract") == "timestamped_receding_horizon_v1":
+            plan_age = status.get("plan_age_s")
+            if (not isinstance(plan_age, (int, float)) or not math.isfinite(plan_age)
+                    or plan_age > max_plan_age_s):
+                return "trajectory_stale"
     else:
         plan_age = status.get("plan_age_s")
         post_execution_replan = any(
-            receipt.get("phase") == "complete"
+            receipt.get("phase") in {"complete", "stalled_replan"}
             and isinstance(receipt.get("completed_age_s"), (int, float))
             and 0 <= receipt["completed_age_s"] <= max_plan_age_s
             for receipt in (heading, status.get("trajectory_execution") or {})

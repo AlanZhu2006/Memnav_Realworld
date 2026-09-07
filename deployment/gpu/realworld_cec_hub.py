@@ -99,11 +99,14 @@ class UpstreamConfig:
     goal_min_inliers: int = GOAL_MIN_INLIERS
     goal_max_cos: float = GOAL_MAX_COS
     authority_mode: str = "cec"
+    terminal_approach: str = "bearing_only"
     historical_depth_source: str = "canonical"
 
     def __post_init__(self) -> None:
         if self.historical_depth_source not in ("canonical", "online_history"):
             raise ValueError("unsupported historical depth source")
+        if self.terminal_approach not in {"bearing_only", "height_scaled_local"}:
+            raise ValueError("unsupported terminal approach")
         if self.authority_mode not in AUTHORITY_MODES:
             raise ValueError(
                 f"unsupported authority mode {self.authority_mode!r}; "
@@ -259,8 +262,48 @@ class CecHybridRouter:
         self.loaded_dataset_manifest_sha256: str | None = None
         self.recorded_tail: deque[tuple[int, bytes]] = deque(
             maxlen=NAVDP_WARMUP_MAX_FRAMES * NAVDP_WARMUP_STRIDE)
+        self.query_observation_count = 0
+
+    def query_observation_step(self, image: bytes, installed_goal_sha256: str) -> dict[str, Any]:
+        """One serialized query-time RGB append, with no retrieval or policy call.
+
+        The sealed Survey and its candidate ceiling are not enlarged. These
+        intermediate views only keep the causal current geometry continuous.
+        The caller uses the same worker/HTTP lock as planning, never a second
+        concurrent writer to LingBot.
+
+        Continuity here means RGB ingestion, not verified pose accuracy. IMU
+        yaw is not fused into LingBot; pure-rotation drift remains unvalidated.
+        """
+        if not self.initialized or self.phase != PHASE_REVISIT:
+            raise ValueError("query observation requires an initialized revisit_query phase")
+        if self.memory_degraded or self.native_state_uncertain:
+            raise HybridBackendError("state is uncertain; reset is required")
+        if self.active_goal is not None and installed_goal_sha256 != self.active_goal["sha256"]:
+            raise ValueError("query observation goal identity changed")
+        if not image:
+            raise ValueError("image is required")
+        try:
+            payload = _json_object(self.session.post(
+                f"{self.config.memnav_url}/memory_step",
+                files={"image": _file("image.jpg", image, "image/jpeg")},
+                data={"materialize_monocular_depth": "0"},
+                timeout=self.config.timeout,
+            ), "query geometry observation")
+            if (payload.get("image_sha256") != hashlib.sha256(image).hexdigest()
+                    or type(payload.get("frame_idx")) is not int):
+                raise HybridBackendError("query geometry append did not acknowledge this RGB")
+        except Exception as error:
+            self.memory_degraded = True
+            raise HybridBackendError(f"query geometry append failed; reset required: {error}") from error
+        self.query_observation_count += 1
+        return {"phase": self.phase, "frame_idx": payload.get("frame_idx"),
+                "image_sha256": payload.get("image_sha256"),
+                "query_observation_count": self.query_observation_count,
+                "policy_fifo_updated": False, "sealed_survey_updated": False}
 
     def reset(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        self.query_observation_count = 0
         resume_empty_auto_dataset = False
         if self.dataset_store is not None and self.dataset_store.recording:
             dataset_status = self.dataset_store.status()
@@ -384,6 +427,8 @@ class CecHybridRouter:
             "algo": "cec_hybrid_navdp",
             "protocol_version": PROTOCOL_VERSION,
             "terminal_handoff_schema": TERMINAL_HANDOFF_SCHEMA,
+            "query_observation_supported": True,
+            "query_observation_count": self.query_observation_count,
             "phase": self.phase,
             "frames_recorded": self.frames_recorded,
             "memnav_algo": memnav.get("algo"),
@@ -1351,22 +1396,41 @@ class CecHybridRouter:
                 "status": "authority_disabled_formal_native_arm",
                 "certificate_accepted": False,
             }
+            if self.config.terminal_approach == "height_scaled_local":
+                # A new paired experiment may share this terminal adapter
+                # across both arms. This is native+terminal, not the old
+                # untouched-native baseline; record that distinction.
+                local_evidence = self._direct_local_pose(goal)
             local_decision = decide_local_pose_handoff(
                 long_range_available=False,
                 evidence=local_evidence,
                 local_latched=False,
                 stop_streak=0,
+                metric_approach=self.config.terminal_approach == "height_scaled_local",
+                expected_frame_index=probe.get("frame_idx"),
             )
+            if not local_decision.metric_approach_active:
+                # Do not leak the direct expert's long-range bearing into the
+                # memory-disabled comparator.
+                local_decision = decide_local_pose_handoff(
+                    long_range_available=False, evidence=None)
             self.terminal_local_latched = False
             self.terminal_stop_streak = 0
-            result = self._native_plan(image, goal, navdp_form)
+            if local_decision.metric_approach_active and local_decision.disposition == "bearing_local":
+                result = self._mixed_plan(image, goal, local_decision.controller_pointgoal_m, navdp_form)
+            else:
+                result = self._native_plan(image, goal, navdp_form)
             result.update(decision.audit_dict())
             result.update(local_decision.audit_dict())
             result.update({
                 "cec_authority_mode": self.config.authority_mode,
+                "terminal_approach_mode": self.config.terminal_approach,
+                "baseline_includes_shared_terminal_adapter": self.config.terminal_approach == "height_scaled_local",
                 "cec_takeover": False,
                 "cec_reason": certificate["reason"],
-                "cec_controller": "navdp_image_authority_disabled",
+                "cec_controller": ("native_with_shared_local_approach"
+                                   if local_decision.metric_approach_active
+                                   else "navdp_image_authority_disabled"),
                 "cec_step_index": self.step_index,
                 "cec_frame_idx": probe.get("frame_idx"),
                 "cec_selected_anchor": None,
@@ -1454,6 +1518,8 @@ class CecHybridRouter:
             evidence=local_evidence,
             local_latched=self.terminal_local_latched,
             stop_streak=self.terminal_stop_streak,
+            metric_approach=self.config.terminal_approach == "height_scaled_local",
+            expected_frame_index=probe.get("frame_idx"),
         )
         self.terminal_local_latched = local_decision.local_latched
         self.terminal_stop_streak = local_decision.stop_streak
@@ -1483,6 +1549,7 @@ class CecHybridRouter:
         result.update(local_decision.audit_dict())
         result.update({
             "cec_authority_mode": self.config.authority_mode,
+            "terminal_approach_mode": self.config.terminal_approach,
             "cec_takeover": decision.takeover,
             "cec_reason": certificate.get("reason", decision.reason),
             "cec_controller": controller,
@@ -1533,6 +1600,8 @@ def create_app(router: CecHybridRouter) -> Flask:
     @app.get("/healthz")
     def healthz():
         return jsonify({
+            "query_observation_supported": True,
+            "query_observation_count": router.query_observation_count,
             "ok": True,
             "algo": "cec_hybrid_navdp",
             "protocol_version": PROTOCOL_VERSION,
@@ -1566,6 +1635,7 @@ def create_app(router: CecHybridRouter) -> Flask:
             "camera_height_m": float(router.config.camera_height_m),
             "cec_authority_mode": router.config.authority_mode,
             "cec_historical_depth_source": router.config.historical_depth_source,
+            "terminal_approach_mode": router.config.terminal_approach,
         })
 
     @app.post("/navigator_reset")
@@ -1575,6 +1645,24 @@ def create_app(router: CecHybridRouter) -> Flask:
         try:
             try:
                 return jsonify(router.reset(request.get_json(silent=True) or {}))
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+            except HybridBackendError as error:
+                return jsonify({"error": str(error), "reset_required": True}), 503
+        finally:
+            call_lock.release()
+
+    @app.post("/query_observation_step")
+    def query_observation_step():
+        if "image" not in request.files:
+            return jsonify({"error": "missing files: image"}), 400
+        if not call_lock.acquire(blocking=False):
+            return jsonify({"error": "hub_busy"}), 409
+        try:
+            try:
+                return jsonify(router.query_observation_step(
+                    request.files["image"].read(),
+                    request.form.get("installed_goal_sha256", "")))
             except ValueError as error:
                 return jsonify({"error": str(error)}), 400
             except HybridBackendError as error:
@@ -1876,6 +1964,9 @@ def main() -> None:
     parser.add_argument("--connect-timeout-s", type=float, default=3.0)
     parser.add_argument("--request-timeout-s", type=float, default=180.0)
     parser.add_argument("--camera-height-m", type=float, required=True)
+    parser.add_argument("--terminal-approach", choices=["bearing_only", "height_scaled_local"],
+                        default="bearing_only",
+                        help="opt-in local approach; use identically in both paired arms")
     parser.add_argument(
         "--historical-depth-source", choices=["canonical", "online_history"],
         default="canonical", help="must match the reset-bound MemNav depth source")
@@ -1883,9 +1974,9 @@ def main() -> None:
         "--authority-mode",
         choices=AUTHORITY_MODES,
         default="cec",
-        help=("cec enables certified long/local bearing authority; native "
-              "keeps the same monocular stream but always calls the native "
-              "ImageGoal endpoint"),
+        help=("cec enables certified long/local bearing authority; native disables "
+              "historical guidance. An explicit height_scaled_local adapter is "
+              "shared by both arms, not the old untouched-native baseline"),
     )
     parser.add_argument(
         "--goal-candidate-dir", default=None,
@@ -1947,6 +2038,7 @@ def main() -> None:
         goal_max_cos=float(args.goal_max_cos),
         authority_mode=args.authority_mode,
         historical_depth_source=args.historical_depth_source,
+        terminal_approach=args.terminal_approach,
     ), dataset_store=dataset_store,
        auto_dataset_id=args.auto_dataset_id,
        auto_dataset_metadata=auto_dataset_metadata)
