@@ -14,6 +14,9 @@ import os
 import requests
 from PIL import Image, ImageDraw, ImageFont
 import argparse
+import gc
+import threading
+import torch
 parser = argparse.ArgumentParser()
 parser.add_argument("--port",type=int,default=8888)
 parser.add_argument("--checkpoint",type=str,default="/home/PJLAB/caiwenzhe/Desktop/navdp_bench/baselines/navdp/checkpoints/cross-waic-final4-125.ckpt")
@@ -48,6 +51,53 @@ navdp_navigator = None
 navdp_fps_writer = None
 active_depth_source = args.depth_source
 monocular_depth_cache = {}
+episode_request_lock = threading.Lock()
+
+
+@app.before_request
+def serialize_episode_requests():
+    # Reset/release must not race an in-flight inference or its depth request.
+    episode_request_lock.acquire()
+
+
+@app.teardown_request
+def unlock_episode_request(error):
+    episode_request_lock.release()
+
+
+def release_unused_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+
+@app.route("/resident/status")
+def resident_status():
+    return jsonify({
+        "resident_contract": "episode_reset_v1", "pid": os.getpid(),
+        "weights_loaded": navdp_navigator is not None,
+        "queue_lengths": ([] if navdp_navigator is None else
+                          [len(q) for q in navdp_navigator.memory_queue]),
+        "depth_transactions": len(monocular_depth_cache),
+        "cuda_allocated_bytes": torch.cuda.memory_allocated(),
+        "cuda_reserved_bytes": torch.cuda.memory_reserved(),
+    })
+
+
+@app.route("/resident/release", methods=["POST"])
+def release_episode():
+    global navdp_fps_writer
+    if navdp_navigator is not None:
+        navdp_navigator.reset(navdp_navigator.batch_size,
+                             navdp_navigator.stop_threshold)
+    monocular_depth_cache.clear()
+    if navdp_fps_writer is not None:
+        navdp_fps_writer.close()
+        navdp_fps_writer = None
+    release_unused_memory()
+    return resident_status()
 
 
 def _decode_request_depth(depth_file, batch_size):
@@ -267,6 +317,12 @@ def navdp_reset():
         navdp_navigator.reset(batchsize,threshold)
     else:
         navdp_navigator.reset(batchsize,threshold)
+
+    navdp_navigator.image_intrinsic = intrinsic
+    # Weight initialization must not consume a seeded run's diffusion RNG on
+    # cold starts only. Cold and resident resets now have the same seed boundary.
+    apply_seed(seed)
+    release_unused_memory()
 
     if os.environ.get("NAVDP_DISABLE_VIDEO", "0") == "1":
         navdp_fps_writer = None

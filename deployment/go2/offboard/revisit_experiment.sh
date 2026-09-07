@@ -60,6 +60,7 @@ Usage (run on Jetson):
       --plan FROZEN_PAIRED_PLAN.json
   revisit_experiment.sh formal-status
   revisit_experiment.sh stop
+  revisit_experiment.sh park
 
 survey-prepare:
   Starts RTX + D435i + a LOCKED adapter, resets the policy and opens an
@@ -80,7 +81,7 @@ survey-return:
   disabled on the outbound leg and becomes active only after this command.
 
 formal-start:
-  Safely restarts both machines, loads and verifies the sealed survey, uses
+  Resets episode state while retaining compatible GPU weights, loads and verifies the sealed survey, uses
   the current camera view to initialize only NavDP's short FIFO, installs the
   exact preregistered external goal and starts the Go2 bridge. Goal and dataset
   SHA-256 plus the required authority arm are verified from RTX health.
@@ -380,7 +381,7 @@ PY
   echo "$receipt" | python3 -m json.tool
   echo
   echo "Dataset is sealed.  The current in-memory session may be inspected, but"
-  echo "formal-start will restart both machines and prove persistent replay."
+  echo "formal-start will reset episode state and prove persistent replay (GPU weights stay resident)."
 }
 
 formal_start() {
@@ -489,9 +490,9 @@ PY
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     force_motion_lock
   fi
-  # A sealed dataset is persistent.  Always rebuild both process trees so the
-  # formal pass proves load/replay instead of accidentally reusing survey RAM.
-  bash "$FULLMONO" stop --config "$(active_config)"
+  # A sealed dataset is persistent. Clear per-episode state and rebuild the
+  # hub/client; formal load/replay stays mandatory even with resident weights.
+  bash "$FULLMONO" park --config "$(active_config)"
   mkdir -p "$run_root"
   write_receipt "$run_root/formal_registration.json" "$registration_json"
   local config_path="$run_root/formal_config.json"
@@ -617,7 +618,7 @@ stop_all() {
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     force_motion_lock
   fi
-  bash "$FULLMONO" stop --config "$(active_config)"
+  bash "$FULLMONO" "${1:-stop}" --config "$(active_config)"
 }
 
 action="${1:-}"
@@ -631,6 +632,7 @@ case "$action" in
   formal-start) [[ $# -ge 1 ]] || die "formal-start requires DATASET_ID"; formal_start "$@" ;;
   formal-status) [[ $# -eq 0 ]] || die "formal-status takes no arguments"; formal_status ;;
   stop) [[ $# -eq 0 ]] || die "stop takes no arguments"; stop_all ;;
+  park) [[ $# -eq 0 ]] || die "park takes no arguments"; stop_all park ;;
   -h|--help|help|"") usage ;;
   *) die "unknown action: $action" ;;
 esac

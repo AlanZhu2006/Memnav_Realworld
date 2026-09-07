@@ -40,7 +40,7 @@ exec env PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   MEMNAV_GROUND_SCALE_MAX=6.0 MEMNAV_GATE_FUSION=complementary \
   MEMNAV_AUX_POSE_CALIBRATION=empirical MEMNAV_COLLISION_SELECT=1 \
   MEMNAV_REPORT_TO=none \
-  "$MEMNAV_PY" -u "$MEMNAV_SERVER" \
+  "$MEMNAV_PY" -u "$REPO_ROOT/deployment/gpu/resident_memnav_server.py" "$MEMNAV_SERVER" \
     --host 127.0.0.1 --port "$MEMNAV_PORT" --checkpoint "$MEMNAV_CKPT" \
     --internnav_root "$INTERNNAV_ROOT" --num_samples 16 \
     --exclude_recent 32 --retrieval raw \
@@ -48,6 +48,7 @@ exec env PYTHONUNBUFFERED=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     --graph_subgoal_spacing_m 0.0 --graph_subgoal_arrival_m 0.60 \
     --flow_gate auto --buffer_root "$BUFFER_ROOT" \
     --certified_relocalization \
+    --certified_reference_depth_source "$CFG_HISTORICAL_DEPTH_SOURCE" \
     --lightglue_repo "$LIGHTGLUE_REPO" \
     --lightglue_dependency_root "$DEPENDENCY_ROOT" \
     --lightglue_max_keypoints 2048 \

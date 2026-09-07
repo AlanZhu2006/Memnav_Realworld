@@ -27,6 +27,7 @@ Usage:
   revisit_debug.sh record-stop
   revisit_debug.sh revisit-prepare [--run-id RUN_ID]
   revisit_debug.sh stop
+  revisit_debug.sh park
 
 record-prepare:
   Prepares the same one-way Survey but leaves recording PAUSED at zero frames.
@@ -41,13 +42,13 @@ record-start:
 record-stop:
   Requires the persistent dataset seal gates (normally >=40 memory frames and
   exactly zero Survey candidates because M is external), then locks and stops
-  both machines.
+  the motion stack, keeping GPU model weights resident with episode state reset.
   If a seal gate is not ready, the stack stays locked and recording so history
   is not accidentally discarded.
 
 revisit-prepare:
-  Accepts a validated STOP SURVEY receipt directly from Foxglove, then restarts
-  both machines, verifies and replays the sealed history, installs the exact
+  Accepts a validated STOP SURVEY receipt directly from Foxglove, rebinds the
+  hub and motion-locked client, verifies and replays the sealed history, installs the exact
   frozen M image under mono_cec authority, starts the Go2 watchdog bridge, and
   leaves motion disabled + estop. It never starts physical motion.
 EOF
@@ -393,9 +394,13 @@ print(json.loads(Path(sys.argv[1]).read_text())["manifest_sha256"])
 PY
 )"
   update_state sealed "$manifest_sha"
-  bash "$REVISIT" --config "$experiment" stop
+  if ! bash "$REVISIT" --config "$experiment" park; then
+    # The seal is already durable. A cleanup failure must never make the GUI
+    # resume recording into that immutable dataset as if the seal had failed.
+    echo "Warning: dataset sealed, but GPU parking failed; inspect cleanup before the next start." >&2
+  fi
   echo
-  echo "Persistent history sealed and the complete Jetson + RTX stack stopped."
+  echo "Persistent history sealed; GPU residency/cleanup result is reported above."
   echo "  dataset:        $dataset_id"
   echo "  manifest sha:   $manifest_sha"
   echo "  next:            $0 revisit-prepare"
@@ -472,8 +477,8 @@ revisit_prepare() {
 stop_debug() {
   local experiment
   experiment="$(state_value experiment_path)"
-  bash "$REVISIT" --config "$experiment" stop
-  echo "Revisit debug stack stopped; sealed dataset files were not deleted."
+  bash "$REVISIT" --config "$experiment" "${1:-stop}"
+  echo "Revisit motion stack stopped; sealed dataset files were not deleted."
 }
 
 command="${1:-}"
@@ -485,6 +490,7 @@ case "$command" in
   record-stop) [[ $# -eq 0 ]] || die "record-stop takes no arguments"; record_stop ;;
   revisit-prepare) revisit_prepare "$@" ;;
   stop) [[ $# -eq 0 ]] || die "stop takes no arguments"; stop_debug ;;
+  park) [[ $# -eq 0 ]] || die "park takes no arguments"; stop_debug park ;;
   -h|--help|help|"") usage ;;
   *) die "unknown command: $command" ;;
 esac

@@ -63,6 +63,13 @@ case "$CFG_AUTHORITY_MODE" in
   cec|native) pass "authority mode: $CFG_AUTHORITY_MODE" ;;
   *) fail "configured authority_mode must be cec or native" ;;
 esac
+case "$CFG_HISTORICAL_DEPTH_SOURCE" in
+  canonical|online_history) pass "CEC history depth: $CFG_HISTORICAL_DEPTH_SOURCE" ;;
+  *) fail "unknown CEC historical depth source" ;;
+esac
+if ! grep -q -- '--certified_reference_depth_source' "$MEMNAV_SERVER"; then
+  fail "external MemNav source lacks the configured CEC depth-source interface"
+fi
 for port in "$MEMNAV_PORT" "$NAVDP_PORT" "$CEC_HUB_PORT"; do
   if ss -ltn | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
     fail "port already in use: $port"

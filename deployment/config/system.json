@@ -123,7 +123,8 @@
       "goal_min_inliers": 16,
       "goal_max_cos": 0.9,
       "episodic_dataset_min_frames": 40,
-      "eager_depth_cache": false
+      "eager_depth_cache": false,
+      "historical_depth_source": "online_history"
     },
     "arrival": {
       "rate_hz": 12.0,

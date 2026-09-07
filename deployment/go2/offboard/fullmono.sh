@@ -22,6 +22,7 @@ usage() {
 Usage:
   fullmono.sh start  --config RESOLVED_CONFIG.json
   fullmono.sh status --config RESOLVED_CONFIG.json
+  fullmono.sh park   --config RESOLVED_CONFIG.json
   fullmono.sh stop   --config RESOLVED_CONFIG.json
 
 This is an internal launcher. Normally use nav_stack.sh with a tracked
@@ -107,15 +108,21 @@ start_stack() {
   trap rollback_partial_start EXIT
 
   local health
+  local resident_state=""
   if remote_session_exists; then
+    resident_state="$(remote_exec "tmux show-environment -t $(shell_quote "$CFG_GPU_SESSION") MEMNAV_RESIDENT_STATE 2>/dev/null | sed -n 's/^MEMNAV_RESIDENT_STATE=//p'")"
+  fi
+  if remote_session_exists && [[ "$resident_state" != parked ]]; then
+    [[ -z "$resident_state" || "$resident_state" == active ]] \
+      || die "RTX lifecycle is $resident_state; incomplete preparation must be stopped first"
     assert_remote_session_config
     health="$(remote_health)" || die "RTX session exists but hub is unhealthy"
     validate_health "$health" >/dev/null || die "RTX session advertises wrong policy contract"
     echo "Reusing healthy RTX policy session: $CFG_GPU_SESSION"
   else
-    echo "Starting RTX policy stack through $CFG_GPU_HOST ..."
+    echo "Starting/rebinding RTX policy stack through $CFG_GPU_HOST ..."
     remote_exec \
-      "cd $(shell_quote "$CFG_GPU_REPO") && bash deployment/gpu/scripts/preflight.sh --config $(shell_quote "$GPU_CONFIG") && bash deployment/gpu/scripts/run_policy_stack.sh --config $(shell_quote "$GPU_CONFIG")"
+      "cd $(shell_quote "$CFG_GPU_REPO") && bash deployment/gpu/scripts/run_policy_stack.sh --config $(shell_quote "$GPU_CONFIG")"
     started_gpu=true
     health="$(remote_health)" || die "RTX policy stack started but health is unavailable"
     validate_health "$health"
@@ -149,6 +156,13 @@ status_stack() {
     failures=$((failures + 1))
   fi
   if ssh "${SSH_OPTIONS[@]}" "$CFG_GPU_HOST" true 2>/dev/null && remote_session_exists; then
+    local resident_state
+    resident_state="$(remote_exec "tmux show-environment -t $(shell_quote "$CFG_GPU_SESSION") MEMNAV_RESIDENT_STATE 2>/dev/null | sed -n 's/^MEMNAV_RESIDENT_STATE=//p'")"
+    if [[ "$resident_state" == parked ]]; then
+      echo "RTX models: RESIDENT / IDLE (hub absent; episode state cleared)"
+      echo "Motion stack is stopped; start a new phase to bind a fresh hub."
+      return "$failures"
+    fi
     echo "RTX session: RUNNING ($CFG_GPU_HOST:$CFG_GPU_SESSION)"
     assert_remote_session_config || failures=$((failures + 1))
     local health
@@ -169,14 +183,37 @@ status_stack() {
 stop_stack() {
   navdp_require_config_arg "$@"
   navdp_read_config "$NAVDP_RUN_CONFIG"
+  GPU_CONFIG="$CFG_GPU_REPO/runtime/config/$CFG_CONFIG_ID.json"
   bash "$OFFBOARD_DIR/stop_offboard_stack.sh" --config "$NAVDP_RUN_CONFIG"
   if ssh "${SSH_OPTIONS[@]}" "$CFG_GPU_HOST" true 2>/dev/null; then
-    remote_exec "tmux kill-session -t $(shell_quote "$CFG_GPU_SESSION") 2>/dev/null || true"
+    remote_exec "cd $(shell_quote "$CFG_GPU_REPO") && bash deployment/gpu/scripts/stop_policy_stack.sh --config $(shell_quote "$GPU_CONFIG")"
   else
     echo "Warning: RTX is unreachable; its policy session was not stopped." >&2
     return 1
   fi
   echo "Full-Mono Jetson and RTX sessions are stopped."
+}
+
+park_stack() {
+  navdp_require_config_arg "$@"
+  navdp_read_config "$NAVDP_RUN_CONFIG"
+  # Stop command production and its in-flight client before touching GPU state.
+  bash "$OFFBOARD_DIR/stop_offboard_stack.sh" --config "$NAVDP_RUN_CONFIG"
+  if remote_session_exists; then
+    local remote_state
+    remote_state="$(remote_exec "tmux show-environment -t $(shell_quote "$CFG_GPU_SESSION") MEMNAV_RESIDENT_STATE 2>/dev/null | sed -n 's/^MEMNAV_RESIDENT_STATE=//p'")"
+    if [[ "$remote_state" == parked ]]; then
+      echo "RTX models already parked; motion stack remains stopped."
+      return
+    fi
+    assert_remote_session_config
+    GPU_CONFIG="$CFG_GPU_REPO/runtime/config/$CFG_CONFIG_ID.json"
+    remote_exec "cd $(shell_quote "$CFG_GPU_REPO") && bash deployment/gpu/scripts/park_policy_stack.sh --config $(shell_quote "$GPU_CONFIG")"
+  else
+    # Distinguish no session from a lost SSH connection.
+    remote_exec true || die "RTX unreachable; cannot confirm episode memory cleanup"
+  fi
+  echo "Motion stack stopped; GPU weights retained with episode state cleared."
 }
 
 action="${1:-}"
@@ -185,6 +222,7 @@ case "$action" in
   start) start_stack "$@" ;;
   status) status_stack "$@" ;;
   stop) stop_stack "$@" ;;
+  park) park_stack "$@" ;;
   -h|--help|help|"") usage ;;
   *) die "unknown action: $action" ;;
 esac

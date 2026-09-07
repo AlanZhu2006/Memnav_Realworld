@@ -1245,7 +1245,7 @@ class RevisitOperatorService:
                 [
                     "bash",
                     str(self.repo_root / "deployment/go2/offboard/revisit_debug.sh"),
-                    "stop",
+                    "park",
                 ],
                 cwd=self.repo_root,
                 stdout=log,

@@ -1,5 +1,11 @@
 # RTX 4090 Policy Stack
 
+2026-09-07 update: new resolved runs select `cec.historical_depth_source=online_history`.
+Historical CEC depth is retained from the shared causal stream; legacy configs
+without this field still use canonical replay. See
+[`CEC_ONLINE_HISTORY_UPDATE_20260907_CN.md`](../../CEC_ONLINE_HISTORY_UPDATE_20260907_CN.md)
+for costs, evidence, receipt fields and the next-start-only deployment boundary.
+
 The RTX side runs the loopback-only MemNav, frozen NavDP and CEC hub services.
 It is an internal half of the Full-Mono stack; normal operation starts it from
 the Jetson:
@@ -50,3 +56,42 @@ Check Python syntax without starting services or issuing motion commands:
 
 No unit-test suite is maintained. Use the resolved-config preflight and service
 health receipts for runtime validation; syntax checks alone do not prove readiness.
+
+## Resident models, isolated episodes
+
+The Episode workflow uses `fullmono.sh park` after sealing Survey and after a
+Revisit ends. This stops the Jetson motion stack first, removes the GPU hub,
+drains NavDP, and resets NavDP/LingBot/CEC episode state. Model weights remain
+loaded. CPU garbage collection and CUDA unused-cache release run at episode
+boundaries, never in the navigation loop. Existing recordings, sealed datasets
+and per-episode RGB buffers are not deleted. An idle GPU therefore still shows
+the VRAM used by model weights; zero VRAM is not the expected idle state.
+
+On the next start, only a managed, parked, empty and compatible model session
+is reused. The hub is newly created with the new immutable run config (including
+CEC versus Mono-native authority). Model/code/weight metadata changes cause a
+cold start of the owned parked session. Active or unidentified sessions are
+not replaced. Failed cleanup discards the owned model processes rather than
+letting the next experiment inherit uncertain state.
+
+Every formal arm still performs the original reset, sealed manifest/hash checks,
+full causal Survey replay, exact frozen goal binding and query-start FIFO prime.
+No controller, speed, termination, sensor or replay rule is relaxed. Seeded
+NavDP reset applies the seed after model initialization too, so loading weights
+cannot shift the random sequence on cold starts but not warm starts.
+
+`stop` remains the explicit full shutdown command to release the model weights
+as well. GPU-only lifecycle commands (no actuator path):
+
+```bash
+bash deployment/gpu/scripts/park_policy_stack.sh --config runtime/config/CONFIG_ID.json
+# Full shutdown, including weights:
+bash deployment/gpu/scripts/stop_policy_stack.sh --config runtime/config/CONFIG_ID.json
+```
+
+While parked the hub is intentionally absent; model idle receipts are available
+on loopback `/resident/status` at ports 18888 and 8888. Cleanup receipts with
+PIDs, zero frame/queue counts and CUDA allocated/reserved bytes are appended to
+`runtime/gpu/logs/resident_lifecycle.jsonl`. Reuse saves model loading, not Survey
+replay or recording finalization; neither constant-time preparation nor identical
+stochastic trajectories is implied.

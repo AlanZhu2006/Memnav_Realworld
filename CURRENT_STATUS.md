@@ -1,5 +1,10 @@
 # Current Full-Mono Real-World Status
 
+2026-09-07 实现更新：新的运行配置默认使用 `online_history`，为 CEC 复用观察时
+保存的历史 LingBot 深度。保留当前帧 depth 复用、resident 模型管理及旧配置的
+canonical 行为，不改控制／到达／急停；现有进程不热切换。本次是代码和配置更新，
+不是新增真机成功结果。详见 [更新说明](CEC_ONLINE_HISTORY_UPDATE_20260907_CN.md)。
+
 Snapshot: **2026-08-30, Foxglove + MCAP migration**
 
 现场实验、交接、双机架构、两阶段数据、控制安全、证据采集和SR/SPL的统一操作入口为

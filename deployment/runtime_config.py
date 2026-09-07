@@ -293,8 +293,14 @@ def _validate_system(system: Mapping[str, Any]) -> None:
     }
     for name, fields in nested_fields.items():
         nested = _object(stack[name], f"stack.{name}")
-        _exact_keys(nested, fields, f"stack.{name}")
+        allowed = fields | ({"historical_depth_source"} if name == "cec" else set())
+        _exact_keys(nested, allowed, f"stack.{name}")
         _required_keys(nested, fields, f"stack.{name}")
+    depth_source = stack["cec"].get("historical_depth_source", "canonical")
+    if depth_source not in ("canonical", "online_history"):
+        raise ConfigError("stack.cec.historical_depth_source must be canonical or online_history")
+    if depth_source == "online_history" and stack["cec"]["eager_depth_cache"]:
+        raise ConfigError("online_history reuses the main stream; disable eager_depth_cache")
     foxglove = _object(stack["foxglove"], "stack.foxglove")
     if not isinstance(foxglove["address"], str) or not foxglove["address"]:
         raise ConfigError("stack.foxglove.address must be a non-empty string")
@@ -850,6 +856,8 @@ def shell_exports(payload: Mapping[str, Any], site: str) -> str:
         "CFG_GOAL_MAX_COS": payload["cec"]["goal_max_cos"],
         "CFG_DATASET_MIN_FRAMES": payload["cec"]["episodic_dataset_min_frames"],
         "CFG_EAGER_DEPTH_CACHE": payload["cec"]["eager_depth_cache"],
+        "CFG_HISTORICAL_DEPTH_SOURCE": payload["cec"].get(
+            "historical_depth_source", "canonical"),
     }
     if site == "gpu":
         gpu_keys = {
@@ -884,6 +892,7 @@ def shell_exports(payload: Mapping[str, Any], site: str) -> str:
             "CFG_GOAL_MAX_COS",
             "CFG_DATASET_MIN_FRAMES",
             "CFG_EAGER_DEPTH_CACHE",
+            "CFG_HISTORICAL_DEPTH_SOURCE",
         }
         fields = {key: value for key, value in fields.items() if key in gpu_keys}
     return "\n".join(

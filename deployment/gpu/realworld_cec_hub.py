@@ -99,8 +99,11 @@ class UpstreamConfig:
     goal_min_inliers: int = GOAL_MIN_INLIERS
     goal_max_cos: float = GOAL_MAX_COS
     authority_mode: str = "cec"
+    historical_depth_source: str = "canonical"
 
     def __post_init__(self) -> None:
+        if self.historical_depth_source not in ("canonical", "online_history"):
+            raise ValueError("unsupported historical depth source")
         if self.authority_mode not in AUTHORITY_MODES:
             raise ValueError(
                 f"unsupported authority mode {self.authority_mode!r}; "
@@ -160,6 +163,7 @@ def _relocalization_trace(certificate: Mapping[str, Any]) -> dict[str, Any]:
         "proposal_attempts",
         "pnp",
         "reference_depth_cache",
+        "reference_depth_source",
         "cached",
     )
     return {
@@ -348,6 +352,12 @@ class CecHybridRouter:
             raise HybridBackendError(
                 "upstream reset did not establish the frozen monocular CEC contract"
             )
+        actual_source = (
+            certificate_status.get("default_reference_depth_source", "canonical")
+            if isinstance(certificate_status, dict) else "canonical")
+        if actual_source != self.config.historical_depth_source:
+            self.native_state_uncertain = True
+            raise HybridBackendError("MemNav historical depth source differs from run config")
         self.initialized = True
         self.phase = PHASE_RECORDING
         dataset_receipt = None
@@ -1555,6 +1565,7 @@ def create_app(router: CecHybridRouter) -> Flask:
             "client_depth_contract": CLIENT_DEPTH_CONTRACT,
             "camera_height_m": float(router.config.camera_height_m),
             "cec_authority_mode": router.config.authority_mode,
+            "cec_historical_depth_source": router.config.historical_depth_source,
         })
 
     @app.post("/navigator_reset")
@@ -1866,6 +1877,9 @@ def main() -> None:
     parser.add_argument("--request-timeout-s", type=float, default=180.0)
     parser.add_argument("--camera-height-m", type=float, required=True)
     parser.add_argument(
+        "--historical-depth-source", choices=["canonical", "online_history"],
+        default="canonical", help="must match the reset-bound MemNav depth source")
+    parser.add_argument(
         "--authority-mode",
         choices=AUTHORITY_MODES,
         default="cec",
@@ -1932,6 +1946,7 @@ def main() -> None:
         goal_min_inliers=max(1, args.goal_min_inliers),
         goal_max_cos=float(args.goal_max_cos),
         authority_mode=args.authority_mode,
+        historical_depth_source=args.historical_depth_source,
     ), dataset_store=dataset_store,
        auto_dataset_id=args.auto_dataset_id,
        auto_dataset_metadata=auto_dataset_metadata)
